@@ -23,6 +23,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -31,10 +32,9 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
-	"bytes"
-	"strconv"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -67,7 +67,7 @@ type SQLtcp struct {
 	Ack          uint32
 	Timestamp    time.Time
 	IsReused     uint
-	RTT	     int64
+	RTT          int64
 }
 
 type SQLtcpSort []SQLtcp
@@ -80,14 +80,14 @@ var Conversations map[string][]SQLtcp
 
 type SQLstats struct {
 	SQLtxt         string
-	Elapsed_ms_all []float64 //Elapsed time from net perspective
-	Elapsed_ms_sum float64 //All elapsed times from net perspective per packet
-	Executions     uint
-	Packets        uint
-	Sessions       map[string]uint
-	ReusedCursors  uint
-	Elapsed_ms_app float64 //Wallclock from the whole app perspective
-	Ela_ms_app_all []float64 //Elapsed time from app perspective
+	Elapsed_ms_all []float64       //Elapsed time from net perspective for each packet (Each Request till following Fetch + DBTime)
+	Elapsed_ms_sum float64         //All elapsed times from net perspective per packet
+	Executions     uint            //Cumulative for all Conversattion
+	Packets        uint            //Cumulative for all Conversattion
+	Sessions       map[string]uint //Number of Converstations in which this sqlid exists
+	ReusedCursors  uint            //Cumulative , how many time this SQL was requested using cursor
+	Elapsed_ms_app float64         //SQLid Wallclock time: since Request till last Fetch (NetTime + AppTime + DBTime)
+	Ela_ms_app_all []float64       //Elapsed time from app perspective
 }
 
 func (s *SQLstats) Fill(sqlTxt string, sqlDuration int64, session string, packet_cnt uint, reusedCursors uint, sqlApp int64) {
@@ -153,9 +153,9 @@ func main() {
 	SQLIdStats = make(map[string]*SQLstats)
 
 	SQLslot := make(map[string]string)
-	reqTimestamp := make(map[string] time.Time)
-	resTimestamp := make(map[string] time.Time)
-	ipTnsBytes := make(map[string] uint64)
+	reqTimestamp := make(map[string]time.Time)
+	resTimestamp := make(map[string]time.Time)
+	ipTnsBytes := make(map[string]uint64)
 
 	handle, err := pcap.OpenOffline(*pcapFile)
 	if err != nil {
@@ -180,14 +180,14 @@ func main() {
 	var appPort, appIp, sqlTxt, found_dbIp, found_dbPort string
 
 	littleEndianFlag := byte(254)
-	usedCursorFlag := []byte{29, 6} //Packet length 29 and type DATA (0x06)
+	usedCursorFlag := []byte{29, 6}           //Packet length 29 and type DATA (0x06)
 	usedCursorFlagAfterError := []byte{48, 6} //Packet length 48 and type DATA (0x06)
-	endOfDataFlag := []byte{123, 5} //Flag in ResonseData 0x7b05 before ORA-01403 at the end of fetch
-	retOpiParam := byte(8) //TNS Header at @10
-	retStatus := byte(4) //TNS Header at @10
-	tnsPacketData := byte(6) //TNS Header at@4
+	endOfDataFlag := []byte{123, 5}           //Flag in ResonseData 0x7b05 before ORA-01403 at the end of fetch
+	retOpiParam := byte(8)                    //TNS Header at @10
+	retStatus := byte(4)                      //TNS Header at @10
+	tnsPacketData := byte(6)                  //TNS Header at@4
 
-	sqlTxtFlow := make(map[string] string)
+	sqlTxtFlow := make(map[string]string)
 
 	var tBegin, tEnd time.Time
 	reusedCursor := uint(0)
@@ -207,7 +207,7 @@ func main() {
 			responsePacket := false
 			for _, checkIP := range dbIPs {
 				log.Println("Checking if " + ipv4.SrcIP.String() +
-						" or " + ipv4.DstIP.String() + " contains " + string(checkIP))
+					" or " + ipv4.DstIP.String() + " contains " + string(checkIP))
 
 				if strings.Contains(ipv4.SrcIP.String(), strings.TrimSpace(checkIP)) {
 					log.Println("Database ip: " + string(checkIP) + " found in source")
@@ -258,15 +258,15 @@ func main() {
 					foundValidPacket = true
 
 				} else if len(app.Payload()) > 13 && (bytes.Equal(app.Payload()[3:5], usedCursorFlag) ||
-					  bytes.Equal(app.Payload()[3:5], usedCursorFlagAfterError)) {
+					bytes.Equal(app.Payload()[3:5], usedCursorFlagAfterError)) {
 
 					log.Printf("Used: % 02x => %s, %d\n", app.Payload()[3:5], appPort, tcp.Seq)
 
 					cursorSlot := strconv.Itoa(int(app.Payload()[13]))
-					sqlTxt = SQLslot[conversationId + "_" + cursorSlot]
+					sqlTxt = SQLslot[conversationId+"_"+cursorSlot]
 
 					log.Println("Called SQL text from reused cursor: ",
-							sqlTxt, appPort, tcp.Seq, tcp.Ack, conversationId + "_" + cursorSlot)
+						sqlTxt, appPort, tcp.Seq, tcp.Ack, conversationId+"_"+cursorSlot)
 
 					reusedCursor = 1
 					foundValidPacket = true
@@ -283,15 +283,15 @@ func main() {
 					log.Println("Cursor Slot is: ", cursorSlot)
 
 					/*if _, present := SQLslot[conversationId + "_" + cursorSlot]; !present {
-                                                        SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
-                                                        sqlTxtFlow[conversationId] = "_"
-                                        }*/
-					SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
+					                SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
+					                sqlTxtFlow[conversationId] = "_"
+					}*/
+					SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
 					foundValidPacket = true
 
 				} else if len(app.Payload()) > 20 &&
-					  !strings.Contains(string(app.Payload()), "AUTH") &&
-					  app.Payload()[4] == tnsPacketData {
+					!strings.Contains(string(app.Payload()), "AUTH") &&
+					app.Payload()[4] == tnsPacketData {
 
 					if app.Payload()[10] == retOpiParam {
 						cursorSlot := strconv.Itoa(int(app.Payload()[21]))
@@ -304,22 +304,22 @@ func main() {
 
 							sqlTxtFlow[conversationId] = "_"
 						}*/
-						SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
+						SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
 						foundValidPacket = true
 
 					} else if app.Payload()[10] == retStatus {
 
 						cursorSlot := strconv.Itoa(int(app.Payload()[28]))
-                                                log.Println("Cursor Slot in RetStatus is: ", cursorSlot, appPort, tcp.Seq)
+						log.Println("Cursor Slot in RetStatus is: ", cursorSlot, appPort, tcp.Seq)
 
 						/*if _, present := SQLslot[conversationId + "_" + cursorSlot]; !present {
-                                                        SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
-							log.Println("Set slot ", conversationId + "_" + cursorSlot, " to: " ,
-									sqlTxtFlow[conversationId])
+						                                                        SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
+													log.Println("Set slot ", conversationId + "_" + cursorSlot, " to: " ,
+															sqlTxtFlow[conversationId])
 
-                                                        sqlTxtFlow[conversationId]= "_"
-                                                }*/
-						SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
+						                                                        sqlTxtFlow[conversationId]= "_"
+						                                                }*/
+						SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
 						foundValidPacket = true
 
 					}
@@ -348,10 +348,10 @@ func main() {
 					Ack:          tcp.Ack,
 					Timestamp:    packet.Metadata().Timestamp,
 					IsReused:     reusedCursor,
-					RTT:	      rtt,
+					RTT:          rtt,
 				})
-				log.Println("Added packaet to conversation ID: " +
-						conversationId, sqlTxt, sqlid.Get(sqlTxt), len(sqlTxt), reusedCursor)
+				log.Println("Added packaet to conversation ID: "+
+					conversationId, sqlTxt, sqlid.Get(sqlTxt), len(sqlTxt), reusedCursor)
 				reusedCursor = 0
 			}
 		}
@@ -432,9 +432,8 @@ func main() {
 		sumApp += SQLIdStats[sqlid].Elapsed_ms_app
 		sumNet += SQLIdStats[sqlid].Elapsed_ms_sum
 
-		graphVal = append(graphVal, chart.Value{Value:
-				SQLIdStats[sqlid].Elapsed_ms_sum /
-						float64(SQLIdStats[sqlid].Executions), Label: sqlid})
+		graphVal = append(graphVal, chart.Value{Value: SQLIdStats[sqlid].Elapsed_ms_sum /
+			float64(SQLIdStats[sqlid].Executions), Label: sqlid})
 
 		var execs []float64
 		for exec := 0; exec < int(SQLIdStats[sqlid].Executions); exec++ {
@@ -471,7 +470,7 @@ func main() {
 	fmt.Println("\nSum App Time(s):", sumApp/1000)
 	fmt.Println("Sum Net Time(s):", sumNet/1000, "\n")
 
-	for ip := range(ipTnsBytes) {
+	for ip := range ipTnsBytes {
 		fmt.Println(ip, ipTnsBytes[ip]/1024, "kb")
 	}
 

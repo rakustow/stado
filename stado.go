@@ -153,8 +153,8 @@ func main() {
 	SQLIdStats = make(map[string]*SQLstats)
 
 	SQLslot := make(map[string]string)
-	reqTimestamp := make(map[string]time.Time)
-	resTimestamp := make(map[string]time.Time)
+	//reqTimestamp := make(map[string] time.Time)
+	//resTimestamp := make(map[string] time.Time)
 	ipTnsBytes := make(map[string]uint64)
 
 	handle, err := pcap.OpenOffline(*pcapFile)
@@ -180,6 +180,9 @@ func main() {
 	var appPort, appIp, sqlTxt, found_dbIp, found_dbPort string
 
 	littleEndianFlag := byte(254)
+	bigEndianFlag := byte(0)
+	oneByteSizeFlag := byte(1)
+	uncertainSqlSize := 65279                 // 0xFEFF at the beginning of SQL
 	usedCursorFlag := []byte{29, 6}           //Packet length 29 and type DATA (0x06)
 	usedCursorFlagAfterError := []byte{48, 6} //Packet length 48 and type DATA (0x06)
 	endOfDataFlag := []byte{123, 5}           //Flag in ResonseData 0x7b05 before ORA-01403 at the end of fetch
@@ -232,7 +235,7 @@ func main() {
 			log.Println("TNS bytes sent over IP address: ", ipTnsBytes)
 
 			if strings.Contains(tcp.DstPort.String(), *dbPort) {
-				reqTimestamp[conversationId] = packet.Metadata().Timestamp
+				//reqTimestamp[conversationId] = packet.Metadata().Timestamp
 				if mi := rSQL.FindStringIndex(string(app.Payload())); mi != nil &&
 					!strings.Contains(string(app.Payload()), "DESCRIPTION") {
 
@@ -241,14 +244,30 @@ func main() {
 					log.Println("Endian flag is: ", endianFlag)
 					sqlLenB := app.Payload()[mi[0]-4 : mi[0]]
 					log.Println("SQL len is: ", sqlLenB)
+					log.Println(packet)
 
 					if endianFlag[0] == littleEndianFlag {
 						sqlLen = int(binary.LittleEndian.Uint32(sqlLenB))
-					} else {
+					} else if endianFlag[0] == bigEndianFlag {
 						sqlLen = int(binary.BigEndian.Uint32(sqlLenB))
+					} else if endianFlag[0] == oneByteSizeFlag {
+						sqlLen = int(sqlLenB[3])
 					}
 
-					sqlTxt = string(app.Payload()[mi[0] : mi[0]+sqlLen])
+					if sqlLen == uncertainSqlSize || sqlLen >= len(app.Payload()[mi[0]-4:]) {
+						log.Println("Can't determine sqlLen size")
+						sqlBufStart := app.Payload()[mi[0]:]
+						sqlTxtEnd := len(sqlBufStart) - 1
+						for i, v := range sqlBufStart {
+							if int(v) == 0 {
+								sqlTxtEnd = i
+								break
+							}
+						}
+						sqlTxt = string(sqlBufStart[0:sqlTxtEnd])
+					} else {
+						sqlTxt = string(app.Payload()[mi[0] : mi[0]+sqlLen])
+					}
 					sqlTxtFlow[conversationId] = sqlTxt
 
 					log.Println("SQLFlow for conversation ",
@@ -272,7 +291,7 @@ func main() {
 					foundValidPacket = true
 				}
 			} else {
-				resTimestamp[conversationId] = packet.Metadata().Timestamp
+				//resTimestamp[conversationId] = packet.Metadata().Timestamp
 				responsePacket = true
 				if strings.Contains(string(app.Payload()), "ORA-01403") {
 
@@ -336,8 +355,9 @@ func main() {
 				tEnd = packet.Metadata().Timestamp
 
 				rtt := int64(0)
-				if responsePacket {
-					rtt = resTimestamp[conversationId].Sub(reqTimestamp[conversationId]).Nanoseconds()
+				if responsePacket && len(Conversations[conversationId]) >= 1 {
+					lastIdx := len(Conversations[conversationId]) - 1
+					rtt = packet.Metadata().Timestamp.Sub(Conversations[conversationId][lastIdx].Timestamp).Nanoseconds()
 				}
 
 				Conversations[conversationId] = append(Conversations[conversationId], SQLtcp{SQL: sqlTxt,
@@ -351,7 +371,7 @@ func main() {
 					RTT:          rtt,
 				})
 				log.Println("Added packaet to conversation ID: "+
-					conversationId, sqlTxt, sqlid.Get(sqlTxt), len(sqlTxt), reusedCursor)
+					conversationId, sqlTxt, sqlid.Get(sqlTxt), len(sqlTxt), reusedCursor, rtt)
 				reusedCursor = 0
 			}
 		}
@@ -369,7 +389,7 @@ func main() {
 		reusedCursors := uint(0)
 
 		for _, p := range Conversations[c] {
-			log.Println(p.SQL, p.Seq, p.Ack)
+			log.Println(p.SQL_id, p.Seq, p.Ack, p.RTT, RTT, p.Timestamp, string(p.SQL[0]), "...")
 			if tPrev.IsZero() {
 				tPrev = p.Timestamp
 				packetDuration = p.Timestamp.Sub(tPrev)
@@ -377,12 +397,14 @@ func main() {
 				packetDuration = p.Timestamp.Sub(tPrev)
 			}
 			pcktCnt += 1
-			RTT += p.RTT
+			//RTT += p.RTT
 			if p.SQL != "_" && p.SQL != "SQL_END" {
 				tB = p.Timestamp
 				sqlTxt = p.SQL
 				sqlId = p.SQL_id
 				reusedCursors += p.IsReused
+			} else { //count RTT minus first packet from first response => avoid counting DB Time from first SQL execution
+				RTT += p.RTT
 			}
 			if sqlId != "+" && (p.SQL == "SQL_END" ||
 				(len(sqlTxt) > 1 && p.SQL == "_" && sqlTxt[0] != 's' && sqlTxt[0] != 'S')) {
@@ -390,7 +412,7 @@ func main() {
 				tE = p.Timestamp
 				//sqlDuration = tE.Sub(tB)
 				sqlDuration = packetDuration //Valid SQL duration from app perspective (wallclock)
-				log.Println("\t", sqlDuration, tE.Sub(tB), RTT, sqlId, sqlTxt, c)
+				log.Println("\tsummary: ", sqlDuration.Nanoseconds(), tE.Sub(tB).Nanoseconds(), tB, tE, RTT, sqlId)
 
 				if _, ok := SQLIdStats[sqlId]; !ok {
 					SQLIdStats[sqlId] = &SQLstats{SQLtxt: "",
@@ -398,8 +420,11 @@ func main() {
 						Sessions: make(map[string]uint), ReusedCursors: 0,
 						Elapsed_ms_app: 0}
 				}
-
-				SQLIdStats[sqlId].Fill(sqlTxt, RTT, c, pcktCnt, reusedCursors, sqlDuration.Nanoseconds())
+				if RTT >= 0 { // Checking if RTT is calculated properly
+					SQLIdStats[sqlId].Fill(sqlTxt, RTT, c, pcktCnt, reusedCursors, sqlDuration.Nanoseconds())
+				} else {
+					log.Println(RTT, sqlTxt, c, sqlId)
+				}
 				sqlTxt = "+"
 				sqlId = "+"
 				pcktCnt = 0
@@ -412,7 +437,7 @@ func main() {
 		}
 	}
 	log.Println("Starting to disaplay SQLstats - len: ", len(SQLIdStats))
-	fmt.Println("SQL ID\t\tEla App (ms)\tEla Net (ms)\tExec\tEla Stddev App\tEla App/Exec\tEla Stddev Net\tEla Net/Exec\tP\tS\tRC")
+	fmt.Println("SQL ID\t\tEla App (ms)\tEla Net(ms)\tExec\tEla Stddev App\tEla App/Exec\tEla Stddev Net\tEla Net/Exec\tP\tS\tRC")
 	fmt.Println("--------------------------------------------------------------------------------------------------------------------------------------------------\n")
 	var graphVal []chart.Value
 	var sumApp, sumNet float64
@@ -463,8 +488,8 @@ func main() {
 		if err != nil {
 			log.Println(err)
 		}
-		defer f.Close()
 		SQLgraph.Render(chart.PNG, f)
+		f.Close()
 	}
 
 	fmt.Println("\nSum App Time(s):", sumApp/1000)
@@ -496,7 +521,7 @@ func main() {
 	if err != nil {
 		log.Println(err)
 	}
-	defer f.Close()
 	graph.Render(chart.PNG, f)
+	f.Close()
 
 }

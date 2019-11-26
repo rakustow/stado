@@ -190,14 +190,10 @@ func main() {
 	retStatus := byte(4)                      //TNS Header at @10
 	tnsPacketData := byte(6)                  //TNS Header at@4
 
-<<<<<<< HEAD
-	sqlTxtFlow := make(map[string]string)
-=======
-	sqlTxtFlow := make(map[string] string) //mapa wykonanych polecen sql w danej konwersacji z przypisaniem do slotu otwartego kursora
->>>>>>> kamil/master
+	sqlTxtFlow := make(map[string]string) //mapa wykonanych polecen sql w danej konwersacji z przypisaniem do slotu otwartego kursora
 
 	var tBegin, tEnd time.Time //liczenie horyzontu czasu od: do: z pliku pcap
-	reusedCursor := uint(0) //Licznik uzytych ponownie kursorow z klienta
+	reusedCursor := uint(0)    //Licznik uzytych ponownie kursorow z klienta
 
 	for packet := range packetSource.Packets() {
 		log.Println("Started packets loop") //Tylko pakiety z wartstwa aplikacyjna (TNS) beda parsowane
@@ -212,8 +208,8 @@ func main() {
 			log.Println("Created tcp and ipv4 fields based on layers")
 			foundValidPacket := true //flag to filter out packets for testing purposes
 			responsePacket := false
-			/*Petla ma na celu ustalenie adresow IP bazy i klienta w badanym pakiecie. 
-			  Odbywa sie to na podstawie porownania zrodlowych i docelowych portow z zadeklarowanym 
+			/*Petla ma na celu ustalenie adresow IP bazy i klienta w badanym pakiecie.
+			  Odbywa sie to na podstawie porownania zrodlowych i docelowych portow z zadeklarowanym
 			  portem z flagi "-p" */
 			for _, checkIP := range dbIPs {
 				log.Println("Checking if " + ipv4.SrcIP.String() +
@@ -247,7 +243,7 @@ func main() {
 				if mi := rSQL.FindStringIndex(string(app.Payload())); mi != nil &&
 					!strings.Contains(string(app.Payload()), "DESCRIPTION") {
 
-					//W niektorych przypadkach dlugosc zapytania jest podawana w formie malego 
+					//W niektorych przypadkach dlugosc zapytania jest podawana w formie malego
 					//a w innych wielkiego indianina - jest flaga, ktora o tym mowi
 					sqlLen := 0
 					endianFlag := app.Payload()[mi[0]-5 : mi[0]-4]
@@ -288,30 +284,21 @@ func main() {
 					foundValidPacket = true
 
 				} else if len(app.Payload()) > 13 && (bytes.Equal(app.Payload()[3:5], usedCursorFlag) ||
-<<<<<<< HEAD
 					bytes.Equal(app.Payload()[3:5], usedCursorFlagAfterError)) {
-
-=======
-					  bytes.Equal(app.Payload()[3:5], usedCursorFlagAfterError)) {
 					//Jesli w pakiecie request nie ma tresci zapytania, to znaczy ze uzywam otwartego kursora
->>>>>>> kamil/master
 					log.Printf("Used: % 02x => %s, %d\n", app.Payload()[3:5], appPort, tcp.Seq)
 
 					//Na @13 jest 1B z ID slotu, na ktorym po stronie serwera jest zapamietany ten kursor
 					//klient prosi o wykonanie tego kursora ze slotu, wiec ja sobie sprytnie ten slot biere i zapmietuje
 					cursorSlot := strconv.Itoa(int(app.Payload()[13]))
-<<<<<<< HEAD
-					sqlTxt = SQLslot[conversationId+"_"+cursorSlot]
-=======
-					//No i go pobieram. Zapamietanie jest na poziomie rozkminy pakietu response - 
+					//No i go pobieram. Zapamietanie jest na poziomie rozkminy pakietu response -
 					//bo wtedy ony serwer to zwraca
-					sqlTxt = SQLslot[conversationId + "_" + cursorSlot]
->>>>>>> kamil/master
+					sqlTxt = SQLslot[conversationId+"_"+cursorSlot]
 
 					log.Println("Called SQL text from reused cursor: ",
 						sqlTxt, appPort, tcp.Seq, tcp.Ack, conversationId+"_"+cursorSlot)
 
-					reusedCursor = 1 //Oznaczam sobie, ze to taki sprytny otwarty kursorek 
+					reusedCursor = 1 //Oznaczam sobie, ze to taki sprytny otwarty kursorek
 					foundValidPacket = true
 				}
 			} else { //A tu juz zachodzi parsowanie pakietu response
@@ -325,45 +312,20 @@ func main() {
 					cursorSlot := strconv.Itoa(int(app.Payload()[endOfDataI+6])) //I @+6 jest slocik, pod ktorym Pan Serwer kurson ony zapamietal
 					log.Println("Cursor Slot is: ", cursorSlot)
 
-<<<<<<< HEAD
-					/*if _, present := SQLslot[conversationId + "_" + cursorSlot]; !present {
-					                SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
-					                sqlTxtFlow[conversationId] = "_"
-					}*/
-					SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
+					SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId] //To i ja dla tej konwersacyji tresc SQL pamietam
 					foundValidPacket = true
 
 				} else if len(app.Payload()) > 20 &&
 					!strings.Contains(string(app.Payload()), "AUTH") &&
 					app.Payload()[4] == tnsPacketData {
-
-=======
-					SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId] //To i ja dla tej konwersacyji tresc SQL pamietam
-					foundValidPacket = true
-
-				} else if len(app.Payload()) > 20 &&
-					  !strings.Contains(string(app.Payload()), "AUTH") &&
-					  app.Payload()[4] == tnsPacketData {
 					//Ale nie zawsze jest tak pieknie, ze reponse ma koniec danych, oj nie zawsze!
 					//Czasem to pakiet po DML a wtedy nic ino flagi retOpiParam albo retStatus
 					//Ale i tam numery slotow znalezn sposobna
->>>>>>> kamil/master
 					if app.Payload()[10] == retOpiParam {
 						cursorSlot := strconv.Itoa(int(app.Payload()[21]))
 						log.Println("Cursor Slot in RetOpiParam is: ", cursorSlot, appPort, tcp.Seq)
 
-<<<<<<< HEAD
-						/*if _, present := SQLslot[conversationId + "_" + cursorSlot]; !present {
-							SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
-							log.Println("Set slot ", conversationId + "_" + cursorSlot, " to: " ,
-									sqlTxtFlow[conversationId])
-
-							sqlTxtFlow[conversationId] = "_"
-						}*/
 						SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
-=======
-						SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
->>>>>>> kamil/master
 						foundValidPacket = true
 
 					} else if app.Payload()[10] == retStatus {
@@ -371,18 +333,7 @@ func main() {
 						cursorSlot := strconv.Itoa(int(app.Payload()[28]))
 						log.Println("Cursor Slot in RetStatus is: ", cursorSlot, appPort, tcp.Seq)
 
-<<<<<<< HEAD
-						/*if _, present := SQLslot[conversationId + "_" + cursorSlot]; !present {
-						                                                        SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
-													log.Println("Set slot ", conversationId + "_" + cursorSlot, " to: " ,
-															sqlTxtFlow[conversationId])
-
-						                                                        sqlTxtFlow[conversationId]= "_"
-						                                                }*/
 						SQLslot[conversationId+"_"+cursorSlot] = sqlTxtFlow[conversationId]
-=======
-						SQLslot[conversationId + "_" + cursorSlot] = sqlTxtFlow[conversationId]
->>>>>>> kamil/master
 						foundValidPacket = true
 
 					}
@@ -399,14 +350,9 @@ func main() {
 				}
 				tEnd = packet.Metadata().Timestamp //A te ostatnio to ciungle w gore i w gore
 
-<<<<<<< HEAD
-				rtt := int64(0)
-				if responsePacket && len(Conversations[conversationId]) >= 1 {
-=======
 				rtt := int64(0) //To ze Round Trip Time, ze zerem inicjowany a potem liczony
 				//Ale tylko jesli pakiet jest pakietem response, od ktorego ostatni timestamp trza odjac, hej!
-				if responsePacket && len(Conversations[conversationId]) >= 1{
->>>>>>> kamil/master
+				if responsePacket && len(Conversations[conversationId]) >= 1 {
 					lastIdx := len(Conversations[conversationId]) - 1
 					//No to biere ostatni zarejestrowany timestamp pakietu tej konwersacji i se odejmuje
 					rtt = packet.Metadata().Timestamp.Sub(Conversations[conversationId][lastIdx].Timestamp).Nanoseconds()
@@ -457,9 +403,10 @@ func main() {
 				sqlTxt = p.SQL
 				sqlId = p.SQL_id
 				reusedCursors += p.IsReused
-			} else { //count RTT minus first packet from first response => avoid counting DB Time from first SQL execution
-				RTT += p.RTT //RTT to ja dodaje, zeby czas sieciowy ogarnac. 
+			} else if sqlId != "+" { //count RTT minus first packet from first response => avoid counting DB Time from first SQL execution
+				RTT += p.RTT //RTT to ja dodaje, zeby czas sieciowy ogarnac.
 				//Bo pierwszy pakiet z poczatku flow pomijam calkiem - zeby nie liczyc czasu na DBTime poswieconego
+				//No i pominac trzeba wszelkie niezdefiniowane sqlid, bo to sa pakiety nieobslugiwane
 			}
 			shortSQL := string(sqlTxt[0])
 			if len(sqlTxt) > 5 {
@@ -470,7 +417,7 @@ func main() {
 			//A to wszystko znaczy, ze to koniec FLOW
 			//Bo dla SELECT to bedzie oczywiscie SQL_END jako flaga, a dla DML to juz po prostu kolejny pakiet
 			//Wiec dla ustalonego SQLID, jesli mamy znacznik konca, lub tresc zapytania jest ustalona we flow
-			//i jest to kolejny pakiet po prostu, ale tresc zapytania to nie SELECT lub WITH 
+			//i jest to kolejny pakiet po prostu, ale tresc zapytania to nie SELECT lub WITH
 			//bo w tych flow jest dlugi i musze miec znacznik konca (SQL_END) to wtedy ogarniaj statystyki
 			if sqlId != "+" && (p.SQL == "SQL_END" || (len(sqlTxt) > 1 && p.SQL == "_" && strings.ToUpper(sqlTxt)[0] != 'S' && strings.ToUpper(sqlTxt)[0] != 'W')) {
 				tE = p.Timestamp
@@ -494,7 +441,7 @@ func main() {
 					//Jesli nie, to glosno o tym krzycze
 					log.Println("Something went wrong with counting, casuse rtt is mniej niz zero!", RTT, sqlTxt, c, sqlId)
 				}
-				//No i na koniec takiego podliczenia statsow to to wszystko sobie ladnie zeruje. 
+				//No i na koniec takiego podliczenia statsow to to wszystko sobie ladnie zeruje.
 				//To dzialac ma prawo tylko, jesli pakiety sa w dobrej kolejnosci,
 				//jesli natomiast by SEQ i ACK kompletnie sie nie zgadzaly w kolejnosci to dupa
 				sqlTxt = "+"
